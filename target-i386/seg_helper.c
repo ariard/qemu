@@ -2021,6 +2021,8 @@ static inline void helper_ret_protected(CPUX86State *env, int shift,
     int cpl, dpl, rpl, eflags_mask, iopl;
     target_ulong ssp, sp, new_eip, new_esp, sp_mask;
 
+    qemu_log("\nEntering RET instruction\n");
+
 #ifdef TARGET_X86_64
     if (shift == 2) {
         sp_mask = -1;
@@ -2066,36 +2068,45 @@ static inline void helper_ret_protected(CPUX86State *env, int shift,
     LOG_PCALL("lret new %04x:" TARGET_FMT_lx " s=%d addend=0x%x\n",
               new_cs, new_eip, shift, addend);
     LOG_PCALL_STATE(CPU(x86_env_get_cpu(env)));
+    qemu_log("Check Code selector is non-zero\n");
     if ((new_cs & 0xfffc) == 0) {
         raise_exception_err_ra(env, EXCP0D_GPF, new_cs & 0xfffc, retaddr);
     }
+    qemu_log("Load Code segment descriptor\n");
     if (load_segment_ra(env, &e1, &e2, new_cs, retaddr) != 0) {
         raise_exception_err_ra(env, EXCP0D_GPF, new_cs & 0xfffc, retaddr);
     }
+    qemu_log("Check descriptor's Code segment flag is set and System flag is cleared\n");
     if (!(e2 & DESC_S_MASK) ||
         !(e2 & DESC_CS_MASK)) {
         raise_exception_err_ra(env, EXCP0D_GPF, new_cs & 0xfffc, retaddr);
     }
     cpl = env->hflags & HF_CPL_MASK;
     rpl = new_cs & 3;
+    qemu_log("Check Request Privilege Level is superior or equal to Current Privilege Level\n");
     if (rpl < cpl) {
         raise_exception_err_ra(env, EXCP0D_GPF, new_cs & 0xfffc, retaddr);
     }
     dpl = (e2 >> DESC_DPL_SHIFT) & 3;
+    qemu_log("Check if Conforming descriptor\n");
     if (e2 & DESC_C_MASK) {
+	qemu_log("If conforming, check Descriptor Privilege Level is inferior or equal\n");
         if (dpl > rpl) {
             raise_exception_err_ra(env, EXCP0D_GPF, new_cs & 0xfffc, retaddr);
         }
     } else {
+        qemu_log("If non-conforming, check DPL equal RPL\n");
         if (dpl != rpl) {
             raise_exception_err_ra(env, EXCP0D_GPF, new_cs & 0xfffc, retaddr);
         }
     }
+    qemu_log("Check if descriptor is Present\n");
     if (!(e2 & DESC_P_MASK)) {
         raise_exception_err_ra(env, EXCP0B_NOSEG, new_cs & 0xfffc, retaddr);
     }
 
     sp += addend;
+    qemu_log("If RPL is not equal to CPL, return different privilege level\n");
     if (rpl == cpl && (!(env->hflags & HF_CS64_MASK) ||
                        ((env->hflags & HF_CS64_MASK) && !is_iret))) {
         /* return to same privilege level */
@@ -2126,6 +2137,7 @@ static inline void helper_ret_protected(CPUX86State *env, int shift,
         }
         LOG_PCALL("new ss:esp=%04x:" TARGET_FMT_lx "\n",
                   new_ss, new_esp);
+	qemu_log("Check Stack selector is non-zero\n");
         if ((new_ss & 0xfffc) == 0) {
 #ifdef TARGET_X86_64
             /* NULL ss is allowed in long mode if cpl != 3 */
@@ -2140,24 +2152,30 @@ static inline void helper_ret_protected(CPUX86State *env, int shift,
             } else
 #endif
             {
+		qemu_log("New SS %x : raise GP(0)\n", new_ss);
                 raise_exception_err_ra(env, EXCP0D_GPF, 0, retaddr);
             }
         } else {
+	    qemu_log("Check Stack selector RPL is equal to Code segment selector RPL\n");
             if ((new_ss & 3) != rpl) {
                 raise_exception_err_ra(env, EXCP0D_GPF, new_ss & 0xfffc, retaddr);
             }
+	    qemu_log("Load new Stack segment descriptor\n");
             if (load_segment_ra(env, &ss_e1, &ss_e2, new_ss, retaddr) != 0) {
                 raise_exception_err_ra(env, EXCP0D_GPF, new_ss & 0xfffc, retaddr);
             }
+	    qemu_log("Check descriptor's Code segment flag is cleared, System flag is cleared, Write segment is set\n");
             if (!(ss_e2 & DESC_S_MASK) ||
                 (ss_e2 & DESC_CS_MASK) ||
                 !(ss_e2 & DESC_W_MASK)) {
                 raise_exception_err_ra(env, EXCP0D_GPF, new_ss & 0xfffc, retaddr);
             }
             dpl = (ss_e2 >> DESC_DPL_SHIFT) & 3;
+	    qemu_log("Check Stack DPL is equal to RPL\n");
             if (dpl != rpl) {
                 raise_exception_err_ra(env, EXCP0D_GPF, new_ss & 0xfffc, retaddr);
             }
+	    qemu_log("Check Stack descriptor is Present\n");
             if (!(ss_e2 & DESC_P_MASK)) {
                 raise_exception_err_ra(env, EXCP0B_NOSEG, new_ss & 0xfffc, retaddr);
             }
@@ -2171,6 +2189,7 @@ static inline void helper_ret_protected(CPUX86State *env, int shift,
                        get_seg_base(e1, e2),
                        get_seg_limit(e1, e2),
                        e2);
+	qemu_log("Code segment and Stack segment descriptors loaded !\n");
         sp = new_esp;
 #ifdef TARGET_X86_64
         if (env->hflags & HF_CS64_MASK) {
